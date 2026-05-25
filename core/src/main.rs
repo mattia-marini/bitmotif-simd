@@ -1,4 +1,5 @@
 pub mod compressed_motif;
+pub mod compressed_motif2;
 pub mod fingerprint;
 pub mod motifs;
 pub mod util;

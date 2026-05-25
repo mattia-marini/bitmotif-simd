@@ -109,8 +109,8 @@ const fn generate_permutations<const N: usize, const M: usize>(
 }
 
 pub trait Permutable {
-    type Output;
     const OUTPUT_SIZE: usize;
+    type Output;
 }
 
 impl Permutable for [u8; 2] {

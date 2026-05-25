@@ -278,35 +278,6 @@ mod __ {
 }
 
 
-// pub trait CompactMotifContainer{
-//     type ContainerType;
-//     const MAX_EDGE_COUNT: usize;
-//     const SIZE: usize;
-//
-//     const ADJ: [struct_name; size] = const_f().0;
-//     const FULL_OVERLAPS: [struct_name; e_count] = const_f().1;
-//     const PART_OVERLAPS: [struct_name; e_count] = const_f().2;
-//     const NODE_MAP: [CompressedNodeSet; e_count] = const_f().3;
-// }
-//
-//
-// impl CompactMotifContainer for CompactMotif<2>{
-//     type ContainerType = u8;
-//     const MAX_EDGE_COUNT: usize = 1;
-//     const SIZE: usize = 2;
-// }
-//
-// struct CompactMotif<const N: usize>
-//     where Self: CompactMotifContainer
-//     {
-//     container: <Self as CompactMotifContainer>::ContainerType,
-// }
-
-
-
-// struct MotifContainer<const N: usize, T>{
-//     container: T,
-// }
 
 #[duplicate_item(
     f_name                struct_name          size      e_bitset    e_count;
