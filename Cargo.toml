@@ -1,0 +1,6 @@
+[workspace]
+members = ["core", "macros"]
+resolver = "3"
+
+[workspace.dependencies]
+macros = { path = "./macros" }

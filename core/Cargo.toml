@@ -1,0 +1,13 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+duplicate = "2.0.1"
+num-traits = "0.2.15"
+seq-macro = "0.3.0"
+hashbrown = "0.17.1"
+foldhash = "0.2.0"
+itertools = "0.14.0"
+macros = {workspace = true}
