@@ -12,5 +12,8 @@ pub mod test;
 /// Order 5 67_098_648  565_464
 fn main() {
     test::order4();
+    // for p in Itertools::permutations(vec![0, 1, 2, 3]) {
+    //     println!("{}", p);
+    // }
     // test::order5();
 }
