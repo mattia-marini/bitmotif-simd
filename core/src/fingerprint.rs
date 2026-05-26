@@ -1,7 +1,4 @@
-use duplicate::duplicate_item;
-use macros::hoist_mod;
-
-use crate::compressed_motif::{CompressedMotif4, CompressedMotif5};
+use crate::compressed_motif2::{CMAssociated, CompactMotif, CompactMotifConfigurator};
 use crate::util::{sort4, sort5};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -9,20 +6,94 @@ use std::hash::Hash;
 pub struct Fingerprint2;
 pub struct Fingerprint3;
 
-pub trait CMAssociated {
-    type CMType;
-}
-#[hoist_mod(attr(duplicate_item(
-    struct_name     associated_type;
-    // [Fingerprint2]  [CompressedMotif2];
-    // [Fingerprint3]  [CompressedMotif3];
-    [Fingerprint4]  [CompressedMotif4];
-    [Fingerprint5]  [CompressedMotif5];
-)))]
-mod __ {
+// pub trait CMAssociated {
+//     type CMType;
+// }
+// #[hoist_mod(attr(duplicate_item(
+//     struct_name     associated_type;
+//     // [Fingerprint2]  [CompressedMotif2];
+//     // [Fingerprint3]  [CompressedMotif3];
+//     [Fingerprint4]  [CompressedMotif4];
+//     [Fingerprint5]  [CompressedMotif5];
+// )))]
+// mod __ {
+//
+//     impl CMAssociated for struct_name {
+//         type CMType = associated_type;
+//     }
+// }
 
-    impl CMAssociated for struct_name {
-        type CMType = associated_type;
+impl From<CompactMotif<4>> for Fingerprint4 {
+    fn from(cm: CompactMotif<4>) -> Self {
+        let mut order_map =
+            [0u8; <<Self as CMAssociated>::CMType as CompactMotifConfigurator>::SIZE];
+        for nodes in cm.iter_nodes() {
+            for n in nodes {
+                order_map[n] += 1 << (2 * (nodes.len() as usize - 2));
+            }
+        }
+        sort4(&mut order_map);
+
+        let mut inclusions = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        for e in cm {
+            for inner in <Self as CMAssociated>::CMType::FULL_OVERLAPS[e] & cm {
+                inclusions[inner] += 1;
+            }
+        }
+
+        for e in cm {
+            inclusions[e] -= 1;
+        }
+
+        Fingerprint4 {
+            order_map,
+            inclusions,
+        }
+    }
+}
+
+impl From<CompactMotif<5>> for Fingerprint5 {
+    fn from(cm: CompactMotif<5>) -> Self {
+        let mut order_map = [0u16; <Self as CMAssociated>::CMType::SIZE];
+
+        for e in cm {
+            let nodes = <Self as CMAssociated>::CMType::NODE_MAP[e];
+            // order_map[nodes.len() as usize - 1] += 1;
+            for n in nodes {
+                order_map[n] += 1 << (3 * (nodes.len() as usize - 2));
+                // splitting u16 in 3 parts for hyperedges of size 2,3 and 4. This will make hashing easy and fast
+                // degrees[n] += 1;
+            }
+        }
+        sort5(&mut order_map);
+
+        let mut edges_props = [0u16; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        // let mut full_overlaps = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        // let mut part_overlaps = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        // let mut inclusions = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+
+        for e in cm {
+            let full_overlaps = cm.full_ovelaps(e).edge_count() as u8 - 1; // -1, removing self
+            let part_overlaps = cm.part_ovelaps(e).edge_count().count_ones() as u8 - 1;
+
+            edges_props[e] = (full_overlaps as u16) | ((part_overlaps as u16) << 5);
+
+            let mut inner_edges = cm.full_ovelaps(e);
+            inner_edges.remove_edge(e);
+            for inner in inner_edges {
+                // len > 2 since there are not multiedges and we consider only full overlaps
+                let len = <Self as CMAssociated>::CMType::NODE_MAP[e].len();
+                if len < 3 {
+                    panic!("Wrong len: {}", len);
+                }
+                edges_props[inner] += 1 << (10 + 2 * (len - 3));
+            }
+        }
+
+        Fingerprint5 {
+            order_map,
+            edges_props,
+        }
     }
 }
 
@@ -37,33 +108,6 @@ pub struct Fingerprint4 {
 impl Fingerprint4 {
     const SIZE: usize = 4;
     const MAX_EDGE_COUNT: usize = 11;
-
-    pub fn from_cm(cm: &<Self as CMAssociated>::CMType) -> Self {
-        let mut order_map = [0u8; <Self as CMAssociated>::CMType::SIZE];
-        for e in cm {
-            let nodes = <Self as CMAssociated>::CMType::NODE_MAP[e];
-            for n in nodes {
-                order_map[n] += 1 << (2 * (nodes.len() as usize - 2));
-            }
-        }
-        sort4(&mut order_map);
-
-        let mut inclusions = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
-        for e in cm {
-            for inner in <Self as CMAssociated>::CMType::FULL_OVERLAPS[e] & *cm {
-                inclusions[inner] += 1;
-            }
-        }
-
-        for e in cm {
-            inclusions[e] -= 1;
-        }
-
-        Fingerprint4 {
-            order_map,
-            inclusions,
-        }
-    }
 }
 
 impl Debug for Fingerprint4 {
@@ -145,54 +189,6 @@ pub struct Fingerprint5 {
 impl Fingerprint5 {
     const SIZE: usize = <Self as CMAssociated>::CMType::SIZE;
     const MAX_EDGE_COUNT: usize = <Self as CMAssociated>::CMType::MAX_EDGE_COUNT;
-
-    pub fn from_cm(cm: &<Self as CMAssociated>::CMType) -> Self {
-        let mut order_map = [0u16; <Self as CMAssociated>::CMType::SIZE];
-
-        for e in cm {
-            let nodes = <Self as CMAssociated>::CMType::NODE_MAP[e];
-            // order_map[nodes.len() as usize - 1] += 1;
-            for n in nodes {
-                order_map[n] += 1 << (3 * (nodes.len() as usize - 2));
-                // splitting u16 in 3 parts for hyperedges of size 2,3 and 4. This will make hashing easy and fast
-                // degrees[n] += 1;
-            }
-        }
-        sort5(&mut order_map);
-
-        let mut edges_props = [0u16; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
-        // let mut full_overlaps = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
-        // let mut part_overlaps = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
-        // let mut inclusions = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
-
-        for e in cm {
-            let full_overlaps = (<Self as CMAssociated>::CMType::FULL_OVERLAPS[e].edges & cm.edges)
-                .count_ones() as u8
-                - 1; // -1, removing self
-
-            let part_overlaps = (<Self as CMAssociated>::CMType::PART_OVERLAPS[e].edges & cm.edges)
-                .count_ones() as u8
-                - 1;
-
-            edges_props[e] = (full_overlaps as u16) | ((part_overlaps as u16) << 5);
-
-            for inner in (<Self as CMAssociated>::CMType::FULL_OVERLAPS[e] & *cm)
-                & <Self as CMAssociated>::CMType::new(!(1 << e))
-            {
-                // len > 2 since there are not multiedges and we consider only full overlaps
-                let len = <Self as CMAssociated>::CMType::NODE_MAP[e].len();
-                if len < 3 {
-                    panic!("Wrong len: {}", len);
-                }
-                edges_props[inner] += 1 << (10 + 2 * (len - 3));
-            }
-        }
-
-        Fingerprint5 {
-            order_map,
-            edges_props,
-        }
-    }
 }
 
 impl Debug for Fingerprint5 {

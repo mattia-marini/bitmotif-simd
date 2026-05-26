@@ -1,4 +1,4 @@
-pub mod compressed_motif;
+// pub mod compressed_motif;
 pub mod compressed_motif2;
 pub mod fingerprint;
 pub mod motifs;
@@ -12,7 +12,7 @@ pub mod test;
 /// Order 4 1990        171
 /// Order 5 67_098_648  565_464
 fn main() {
-    test::order4();
+    test::order5();
     // for p in Itertools::permutations(vec![0, 1, 2, 3]) {
     //     println!("{}", p);
     // }

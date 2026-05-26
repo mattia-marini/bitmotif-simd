@@ -2,14 +2,14 @@ use foldhash::fast::FixedState;
 use hashbrown::{HashMap, HashSet};
 
 use crate::{
-    compressed_motif::{CompressedMotif4, CompressedMotif5},
+    compressed_motif2::CompactMotif,
     motifs::{Motif, generate_motifs},
 };
 
 pub fn order4() {
     let mut count = 0;
     let mut map = HashMap::with_hasher(FixedState::default());
-    CompressedMotif4::enum_labelings(false, |m| {
+    CompactMotif::<4>::enum_labelings(false, |m| {
         let fingerprint = m.fingerprint();
         // println!("{}", m);
         // println!("{:?}", fingerprint);
@@ -75,7 +75,7 @@ pub fn order5() {
     let mut set = HashSet::with_hasher(FixedState::default());
     let time = std::time::Instant::now();
 
-    CompressedMotif5::enum_labelings(true, |m| {
+    CompactMotif::<5>::enum_labelings(true, |m| {
         let fingerprint = m.fingerprint();
         // println!("{}", m);
         // println!("{:?}", fingerprint);

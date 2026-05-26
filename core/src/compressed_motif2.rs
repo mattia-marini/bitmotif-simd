@@ -6,6 +6,8 @@ use std::{
 
 use num_traits::{AsPrimitive, FromPrimitive, One, PrimInt, Zero};
 
+use crate::fingerprint::{Fingerprint2, Fingerprint3, Fingerprint4, Fingerprint5};
+
 #[derive(Copy, Clone)]
 pub struct CompressedNodeSet {
     pub nodes: u8,
@@ -72,9 +74,10 @@ impl IntoIterator for CompressedNodeSet {
 }
 
 macro_rules! define_compact_motif {
-    ($ct:ty, $order:literal, $max_edge_count:literal) => {
+    ($ct:ty, $order:literal, $max_edge_count:literal, $fingerprint: ty) => {
         impl CompactMotifConfigurator for CompactMotif<$order> {
             type ContainerType = $ct;
+            type FingerprintType = $fingerprint;
 
             const MAX_EDGE_COUNT: usize = $max_edge_count;
             const SIZE: usize = $order;
@@ -129,6 +132,20 @@ macro_rules! define_compact_motif {
             pub const fn shr_assign(&mut self, rhs: usize) {
                 self.container >>= rhs
             }
+
+            pub const fn adj() -> <Self as CompactMotifConfigurator>::AdjType {
+                Self::ADJ
+            }
+            pub const fn full_overlaps() -> <Self as CompactMotifConfigurator>::FullOverlapsType {
+                Self::FULL_OVERLAPS
+            }
+            pub const fn part_overlaps() -> <Self as CompactMotifConfigurator>::PartOverlapsType {
+                Self::PART_OVERLAPS
+            }
+            pub const fn node_map() -> <Self as CompactMotifConfigurator>::NodeMapType {
+                Self::NODE_MAP
+            }
+
 
             // -------------------------------------------------------------
             // Adjacency Matrix Builder
@@ -287,6 +304,11 @@ macro_rules! define_compact_motif {
                 }
                 part_overlaps_raw
             }
+
+        }
+
+        impl CMAssociated for $fingerprint {
+            type CMType = CompactMotif<$order>;
         }
     };
 }
@@ -312,6 +334,8 @@ where
         IntoIterator<Item = CompressedNodeSet> + Index<usize, Output = CompressedNodeSet>,
 {
     type ContainerType;
+    type FingerprintType;
+
     const MAX_EDGE_COUNT: usize;
     const SIZE: usize;
 
@@ -333,6 +357,10 @@ where
     const NODE_MAP: Self::NodeMapType = todo!();
 }
 
+pub trait CMAssociated {
+    type CMType;
+}
+
 #[derive(Copy, Clone)]
 pub struct CompactMotif<const N: usize>
 where
@@ -349,16 +377,36 @@ where
         Self { container }
     }
 
-    pub fn iter_edges(&self) -> impl Iterator<Item = usize> + '_ {
+    /// Yields the number of each edge contained in the motif
+    pub fn iter_edges(&self) -> CompactMotifEdgeIter<N> {
         self.into_iter()
     }
 
+    /// Yields the set of nodes that each edge in the motifs has
+    pub fn iter_nodes(&self) -> CompactMotifNodeIter<N> {
+        CompactMotifNodeIter {
+            remaining_edges: self.container,
+        }
+    }
+
+    pub fn edge_count(&self) -> u32 {
+        self.container.count_ones()
+    }
+
+    pub fn add_edge(&mut self, edge_number: usize) {
+        self.container |= Self::CONTAINER_ONE << edge_number;
+    }
+
+    pub fn remove_edge(&mut self, edge_number: usize) {
+        self.container &= !(Self::CONTAINER_ONE << edge_number);
+    }
+
     pub fn part_ovelaps(&self, edge_number: usize) -> Self {
-        Self::PART_OVERLAPS[edge_number]
+        *self & Self::PART_OVERLAPS[edge_number]
     }
 
     pub fn full_ovelaps(&self, edge_number: usize) -> Self {
-        Self::FULL_OVERLAPS[edge_number]
+        *self & Self::FULL_OVERLAPS[edge_number]
     }
 
     pub fn is_empty(&self) -> bool {
@@ -371,6 +419,13 @@ where
 
     pub const fn zero() -> Self {
         <Self as CompactMotifConfigurator>::ONE
+    }
+
+    pub fn fingerprint(&self) -> <Self as CompactMotifConfigurator>::FingerprintType
+    where
+        <Self as CompactMotifConfigurator>::FingerprintType: From<Self>,
+    {
+        (*self).into()
     }
 
     pub fn enum_labelings<F>(show_progress: bool, mut f: F)
@@ -532,18 +587,16 @@ where
     }
 }
 
-pub struct CompactMotifIter<const N: usize>
+pub struct CompactMotifEdgeIter<const N: usize>
 where
     CompactMotif<N>: CompactMotifConfigurator,
 {
     remaining_edges: <CompactMotif<N> as CompactMotifConfigurator>::ContainerType,
 }
 
-impl<const N: usize> Iterator for CompactMotifIter<N>
+impl<const N: usize> Iterator for CompactMotifEdgeIter<N>
 where
     CompactMotif<N>: CompactMotifConfigurator,
-    <CompactMotif<N> as CompactMotifConfigurator>::ContainerType:
-        Eq + Zero + PrimInt + One + BitAndAssign,
 {
     type Item = usize;
 
@@ -576,11 +629,11 @@ where
     CompactMotif<N>: CompactMotifConfigurator,
 {
     type Item = usize;
-    type IntoIter = CompactMotifIter<N>;
+    type IntoIter = CompactMotifEdgeIter<N>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        CompactMotifIter {
+        CompactMotifEdgeIter {
             remaining_edges: self.container,
         }
     }
@@ -591,17 +644,52 @@ where
     CompactMotif<N>: CompactMotifConfigurator,
 {
     type Item = usize;
-    type IntoIter = CompactMotifIter<N>;
+    type IntoIter = CompactMotifEdgeIter<N>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        CompactMotifIter {
+        CompactMotifEdgeIter {
             remaining_edges: self.container,
         }
     }
 }
 
-define_compact_motif!(u8, 2, 1);
-define_compact_motif!(u8, 3, 4);
-define_compact_motif!(u16, 4, 11);
-define_compact_motif!(u32, 5, 26);
+pub struct CompactMotifNodeIter<const N: usize>
+where
+    CompactMotif<N>: CompactMotifConfigurator,
+{
+    remaining_edges: <CompactMotif<N> as CompactMotifConfigurator>::ContainerType,
+}
+
+impl<const N: usize> Iterator for CompactMotifNodeIter<N>
+where
+    CompactMotif<N>: CompactMotifConfigurator,
+{
+    type Item = CompressedNodeSet;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // type T = ;
+        if self.remaining_edges.is_zero() {
+            None
+        } else {
+            // 1. Grab the index of the lowest set bit
+            let index = self.remaining_edges.trailing_zeros() as usize;
+
+            // 2. Clear the lowest set bit blazingly fast via bitwise AND
+            self.remaining_edges &= self.remaining_edges - CompactMotif::<N>::CONTAINER_ONE;
+            Some(CompactMotif::<N>::NODE_MAP[index])
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let count = self.remaining_edges.count_ones() as usize;
+        (count, Some(count))
+    }
+}
+
+define_compact_motif!(u8, 2, 1, Fingerprint2);
+define_compact_motif!(u8, 3, 4, Fingerprint3);
+define_compact_motif!(u16, 4, 11, Fingerprint4);
+define_compact_motif!(u32, 5, 26, Fingerprint5);
