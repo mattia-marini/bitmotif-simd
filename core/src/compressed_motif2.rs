@@ -1,83 +1,30 @@
+use foldhash::fast::FixedState;
+use hashbrown::HashSet;
+use indicatif::ProgressIterator;
 use seq_macro::seq;
+use std::hash::Hash;
+use std::ops::Not;
 use std::{
     fmt::Display,
-    ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Index, Mul, Shl},
+    ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Index, IndexMut, Mul, Shl},
 };
 
 use num_traits::{AsPrimitive, FromPrimitive, One, PrimInt, Zero};
 
-use crate::fingerprint::{Fingerprint2, Fingerprint3, Fingerprint4, Fingerprint5};
-
-#[derive(Copy, Clone)]
-pub struct CompressedNodeSet {
-    pub nodes: u8,
-}
-
-impl CompressedNodeSet {
-    pub fn new(nodes: u8) -> Self {
-        Self { nodes }
-    }
-
-    pub fn len(&self) -> u32 {
-        self.nodes.count_ones()
-    }
-
-    pub fn iter(&self) -> CompressetNodeSetIter {
-        CompressetNodeSetIter {
-            remaining_nodes: self.nodes,
-        }
-    }
-
-    pub fn contains(&self, node: usize) -> bool {
-        (self.nodes & (1 << node)) != 0
-    }
-}
-
-pub struct CompressetNodeSetIter {
-    remaining_nodes: u8,
-}
-
-impl Iterator for CompressetNodeSetIter {
-    type Item = usize;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining_nodes == 0 {
-            None
-        } else {
-            let index = self.remaining_nodes.trailing_zeros() as usize;
-
-            // 2. Clear the lowest set bit
-            self.remaining_nodes &= self.remaining_nodes - 1;
-
-            Some(index)
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let count = self.remaining_nodes.count_ones() as usize;
-        (count, Some(count))
-    }
-}
-
-impl IntoIterator for CompressedNodeSet {
-    type Item = usize;
-    type IntoIter = CompressetNodeSetIter;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        CompressetNodeSetIter {
-            remaining_nodes: self.nodes,
-        }
-    }
-}
+use crate::{
+    compressed_node_set::CompressedNodeSet,
+    fingerprint::{Fingerprint2, Fingerprint3, Fingerprint4, Fingerprint5},
+    util::{BinPerm, binomial_coefficient, factorial},
+};
 
 macro_rules! define_compact_motif {
     ($ct:ty, $order:literal, $max_edge_count:literal, $fingerprint: ty) => {
         impl CompactMotifConfigurator for CompactMotif<$order> {
             type ContainerType = $ct;
             type FingerprintType = $fingerprint;
+
+            /// Every permutatio will be store as nibble. Since max vertex count
+            type PermutationIndexVecType = [u8; 1<<9];
 
             const MAX_EDGE_COUNT: usize = $max_edge_count;
             const SIZE: usize = $order;
@@ -88,16 +35,23 @@ macro_rules! define_compact_motif {
             const ZERO: Self = Self::new(Self::CONTAINER_ZERO);
             const ONE: Self = Self::new(Self::CONTAINER_ONE);
 
+
+            // const PERMUTATIONS_INDEX: Self::PermutationVecType = { }
             type AdjType = [Self; $order];
             type FullOverlapsType = [Self; $max_edge_count];
             type PartOverlapsType = [Self; $max_edge_count];
             type NodeMapType = [CompressedNodeSet; $max_edge_count];
+            type EdgeMapType = [u8; 1 << $order];
 
-            // Replaced the todo!() calls with the newly constructed const evaluator functions
+            type RelabelingMapIndex = [u8; $max_edge_count];
+            type RelabelingMap = [[u8; $max_edge_count]; factorial($order)];
+
             const ADJ: Self::AdjType = Self::get_adj_const_bitmasks();
             const FULL_OVERLAPS: Self::FullOverlapsType = Self::get_full_overlaps_const_bitmasks();
             const PART_OVERLAPS: Self::PartOverlapsType = Self::get_part_overlaps_const_bitmasks();
             const NODE_MAP: Self::NodeMapType = Self::get_node_map_const_bitmasks();
+            const EDGE_MAP: Self::EdgeMapType = Self::get_edge_map_const_bitmasks();
+            const RELABELING_MAP: Self::RelabelingMap = Self::get_relabeling_map();
         }
 
         impl CompactMotif<$order> {
@@ -144,6 +98,20 @@ macro_rules! define_compact_motif {
             }
             pub const fn node_map() -> <Self as CompactMotifConfigurator>::NodeMapType {
                 Self::NODE_MAP
+            }
+
+            pub const fn max_edge_count(order: usize) -> usize {
+                binomial_coefficient($order, order)
+            }
+
+            pub const fn max_edge_count_tot() -> usize {
+                let mut i = 0;
+                let mut count = 0;
+                while i <= $order {
+                    count += binomial_coefficient($order, i);
+                    i += 1;
+                }
+                count
             }
 
 
@@ -305,6 +273,67 @@ macro_rules! define_compact_motif {
                 part_overlaps_raw
             }
 
+            // -------------------------------------------------------------
+            // Edge Index Map Builder
+            // -------------------------------------------------------------
+            pub const fn get_edge_map_const_bitmasks() -> <Self as CompactMotifConfigurator>::EdgeMapType {
+                // Initialize the array with a sentinel value (e.g., u8::MAX)
+                // to denote node combinations that don't correspond to a valid edge.
+                let mut edge_map = [u8::MAX; 1 << $order];
+
+                // Fetch the forward mapping of edge_index -> CompressedNodeSet
+                let node_map = Self::get_node_map_const_bitmasks();
+
+                let mut i = 0;
+                while i < $max_edge_count {
+                    let node_set = node_map[i].nodes;
+
+                    edge_map[node_set as usize] = i as u8;
+
+                    i += 1;
+                }
+
+                edge_map
+            }
+
+            // -------------------------------------------------------------
+            // Relabeling map
+            // -------------------------------------------------------------
+            pub const fn get_relabeling_map() -> <Self as CompactMotifConfigurator>::RelabelingMap {
+                let node_map = Self::get_node_map_const_bitmasks();
+                let edge_map = Self::get_edge_map_const_bitmasks();
+
+                let mut relabeling_map = [[0u8; $max_edge_count]; factorial($order)];
+
+                let mut i = 0;
+                while i < factorial($order) {
+
+
+                    let perm = BinPerm::from_usize(i).decode::<$order>();
+                    let mut j = 0;
+
+                    while j < $max_edge_count {
+                        let mut old_nodes = node_map[j].nodes;
+                        let mut new_nodes = 0u8;
+
+                        while old_nodes != 0 {
+                            let old_node = old_nodes.trailing_zeros() as usize;
+                            old_nodes &= !(1 << old_node);
+
+                            let new_node = perm[old_node];
+                            new_nodes |= 1 << new_node;
+                        }
+
+                        relabeling_map[i][j] = edge_map[new_nodes as usize];
+
+                        j += 1;
+                    }
+                    i += 1;
+                }
+
+                relabeling_map
+            }
+
         }
 
         impl CMAssociated for $fingerprint {
@@ -316,6 +345,10 @@ macro_rules! define_compact_motif {
 pub trait CompactMotifConfigurator
 where
     Self::ContainerType: Eq
+        + PartialEq
+        + Hash
+        + Copy
+        + Clone
         + Zero
         + PrimInt
         + AsPrimitive<usize>
@@ -327,14 +360,21 @@ where
         + Add
         + Shl<Output = Self::ContainerType>
         + FromPrimitive,
+    Self::EdgeMapType: Index<usize, Output = u8>
+        + IndexMut<usize, Output = u8>
+        + IntoIterator<Item = u8>
+        + Default,
     Self::AdjType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
     Self::FullOverlapsType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
     Self::PartOverlapsType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
     Self::NodeMapType:
         IntoIterator<Item = CompressedNodeSet> + Index<usize, Output = CompressedNodeSet>,
+    Self::RelabelingMap: Index<usize, Output = Self::RelabelingMapIndex>,
+    Self::RelabelingMapIndex: Index<usize, Output = u8>,
 {
     type ContainerType;
     type FingerprintType;
+    type PermutationIndexVecType;
 
     const MAX_EDGE_COUNT: usize;
     const SIZE: usize;
@@ -349,24 +389,29 @@ where
     type FullOverlapsType;
     type PartOverlapsType;
     type NodeMapType;
+    type EdgeMapType;
+    type RelabelingMap;
+    type RelabelingMapIndex;
 
-    const ADJ: Self::AdjType = todo!();
     // Self::generate_adj_const_bitmasks();
-    const FULL_OVERLAPS: Self::FullOverlapsType = todo!();
-    const PART_OVERLAPS: Self::PartOverlapsType = todo!();
-    const NODE_MAP: Self::NodeMapType = todo!();
+    const ADJ: Self::AdjType;
+    const FULL_OVERLAPS: Self::FullOverlapsType;
+    const PART_OVERLAPS: Self::PartOverlapsType;
+    const NODE_MAP: Self::NodeMapType;
+    const EDGE_MAP: Self::EdgeMapType;
+    const RELABELING_MAP: Self::RelabelingMap;
 }
 
 pub trait CMAssociated {
     type CMType;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Hash, PartialEq, Eq, Copy, Clone)]
 pub struct CompactMotif<const N: usize>
 where
     Self: CompactMotifConfigurator,
 {
-    container: <Self as CompactMotifConfigurator>::ContainerType,
+    pub container: <Self as CompactMotifConfigurator>::ContainerType,
 }
 
 impl<const N: usize> CompactMotif<N>
@@ -473,31 +518,54 @@ where
             visited_edges == motif.container
         };
 
-        let motif_count = (1 << Self::MAX_EDGE_COUNT) as usize;
+        let mut generate = |iter: Box<dyn Iterator<Item = usize>>| {
+            for i in iter {
+                let motif = Self::new(
+                    <Self as CompactMotifConfigurator>::ContainerType::from_usize(i).unwrap(),
+                );
 
-        let block_size = motif_count / 100;
-        let mut curr_progress = 0;
-        let mut block_progress = 0;
-
-        for i in 0..motif_count {
-            // print_motif(&motif);
-            let motif = Self::new(
-                <Self as CompactMotifConfigurator>::ContainerType::from_usize(i).unwrap(),
-            );
-            if is_connected(motif) {
-                f(motif);
-            }
-
-            if show_progress {
-                if block_progress < block_size {
-                    block_progress += 1;
-                } else {
-                    block_progress = 0;
-                    curr_progress += 1;
-                    println!("Progress: {}%", curr_progress);
+                if is_connected(motif) {
+                    f(motif);
                 }
             }
+        };
+
+        let motif_count = (1 << Self::MAX_EDGE_COUNT) as usize;
+        if show_progress {
+            generate(Box::new((0..motif_count).progress()));
+        } else {
+            generate(Box::new(0..motif_count));
         }
+    }
+
+    pub fn relabeled(&self, perm: BinPerm) -> Self {
+        let mut rv = Self::ZERO;
+        for e in self.iter_edges() {
+            // println!(
+            //     "Relabeling edge {} with perm.container {:016b}",
+            //     e, perm.container
+            // );
+            rv.add_edge(Self::RELABELING_MAP[perm.container][e] as usize)
+        }
+        rv
+    }
+
+    pub fn enum_isomorphism<F>(&self, mut f: F)
+    where
+        F: FnMut(Self),
+    {
+        for p in BinPerm::iter_all::<N>() {
+            f(self.clone().relabeled(p));
+        }
+    }
+
+    pub fn isomorphism_count(&self) -> usize {
+        let mut set = HashSet::with_hasher(FixedState::default());
+        self.enum_isomorphism(|iso| {
+            // println!("iso: {}", iso);
+            set.insert(iso);
+        });
+        set.len()
     }
 
     pub fn to_vec(&self) -> Vec<Vec<usize>> {
@@ -566,6 +634,20 @@ where
     fn shl(self, rhs: usize) -> Self::Output {
         Self {
             container: self.container << rhs,
+        }
+    }
+}
+
+impl<const N: usize> Not for CompactMotif<N>
+where
+    Self: CompactMotifConfigurator,
+{
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self {
+            container: !self.container
+                & ((Self::CONTAINER_ONE << Self::MAX_EDGE_COUNT) - Self::CONTAINER_ONE),
         }
     }
 }

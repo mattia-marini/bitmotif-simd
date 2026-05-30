@@ -4,3 +4,9 @@ resolver = "3"
 
 [workspace.dependencies]
 macros = { path = "./macros" }
+
+[profile.profiling]
+inherits = "release"
+debug = true       # Keep debug symbols for source-level mapping
+lto = false        # Crucially, disable Link Time Optimization
+opt-level = 3

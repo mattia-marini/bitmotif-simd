@@ -10,4 +10,6 @@ seq-macro = "0.3.0"
 hashbrown = "0.17.1"
 foldhash = "0.2.0"
 itertools = "0.14.0"
+indicatif = "0.18.4"
+rkyv = "0.8.15"
 macros = {workspace = true}

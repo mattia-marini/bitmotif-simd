@@ -2,6 +2,7 @@ mod ct_map;
 mod hoist_mod;
 mod inherent;
 mod loader;
+mod tensor;
 
 use proc_macro::TokenStream;
 
@@ -28,4 +29,14 @@ pub fn ct_map_accessor(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn loader(attr: TokenStream, item: TokenStream) -> TokenStream {
     loader::loader(attr, item)
+}
+
+#[proc_macro]
+pub fn build_uniform_tensor(input: TokenStream) -> TokenStream {
+    tensor::build_uniform_tensor(input)
+}
+
+#[proc_macro]
+pub fn build_tensor(input: TokenStream) -> TokenStream {
+    tensor::build_tensor(input)
 }
