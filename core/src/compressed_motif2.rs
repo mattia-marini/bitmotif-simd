@@ -46,12 +46,15 @@ macro_rules! define_compact_motif {
             type RelabelingMapIndex = [u8; $max_edge_count];
             type RelabelingMap = [[u8; $max_edge_count]; factorial($order)];
 
+            type EdgeFilterBitmaskType = [$ct; $max_edge_count];
+
             const ADJ: Self::AdjType = Self::get_adj_const_bitmasks();
             const FULL_OVERLAPS: Self::FullOverlapsType = Self::get_full_overlaps_const_bitmasks();
             const PART_OVERLAPS: Self::PartOverlapsType = Self::get_part_overlaps_const_bitmasks();
             const NODE_MAP: Self::NodeMapType = Self::get_node_map_const_bitmasks();
             const EDGE_MAP: Self::EdgeMapType = Self::get_edge_map_const_bitmasks();
             const RELABELING_MAP: Self::RelabelingMap = Self::get_relabeling_map();
+            const EDGE_FILTER_BITMASK: Self::EdgeFilterBitmaskType = Self::get_order_filter_bitmasks();
         }
 
         impl CompactMotif<$order> {
@@ -112,6 +115,48 @@ macro_rules! define_compact_motif {
                     i += 1;
                 }
                 count
+            }
+
+            pub const fn filter_by_order(&mut self,  order: usize) {
+                self.container &= Self::EDGE_FILTER_BITMASK[order]
+            }
+
+            pub const fn filtered_by_order(mut self,  order: usize)-> Self {
+                self.filter_by_order(order);
+                self
+            }
+
+            pub const fn get_order_filter_bitmask(order: usize) -> $ct{
+                if order<2 {
+                    return Self::CONTAINER_ZERO;
+                }
+                if order >= Self::SIZE {
+                    return Self::CONTAINER_ONE;
+                }
+
+
+                let mut i = 2;
+                let mut upper_bound = 0;
+                while i <= order {
+                    upper_bound += Self::max_edge_count(i);
+                    i+=1;
+                }
+
+
+
+                let low = (1 << (upper_bound - Self::max_edge_count(order))) - 1;
+                let high = ((1 << upper_bound)-1);
+                high & !low
+            }
+
+            pub const fn get_order_filter_bitmasks() -> [$ct; $max_edge_count]{
+                let mut rv = [0; $max_edge_count];
+                let mut i = 0;
+                while i < $max_edge_count{
+                    rv[i] = Self::get_order_filter_bitmask(i);
+                    i+=1;
+                }
+                rv
             }
 
 
@@ -393,13 +438,15 @@ where
     type RelabelingMap;
     type RelabelingMapIndex;
 
-    // Self::generate_adj_const_bitmasks();
+    type EdgeFilterBitmaskType;
+
     const ADJ: Self::AdjType;
     const FULL_OVERLAPS: Self::FullOverlapsType;
     const PART_OVERLAPS: Self::PartOverlapsType;
     const NODE_MAP: Self::NodeMapType;
     const EDGE_MAP: Self::EdgeMapType;
     const RELABELING_MAP: Self::RelabelingMap;
+    const EDGE_FILTER_BITMASK: Self::EdgeFilterBitmaskType;
 }
 
 pub trait CMAssociated {
