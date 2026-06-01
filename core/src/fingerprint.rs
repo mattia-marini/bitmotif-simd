@@ -1,4 +1,4 @@
-use crate::compressed_motif2::{CMAssociated, CompactMotif, CompactMotifConfigurator};
+use crate::compressed_motif::{CMAssociated, CompactMotif, CompactMotifConfigurator};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -9,31 +9,29 @@ pub struct Fingerprint3;
 pub struct Fingerprint4 {
     /// for each node, a histogram of the sizes of the edges it participates in. Sorted by node
     /// degree, then lexicographically by histogram
-    order_map: [u8; 4],
+    order_map: [u8; Self::SIZE],
     /// For each edge, the number of edges in which its fully contained
-    inclusions: [u8; 11],
+    inclusions: [u8; Self::MAX_EDGE_COUNT],
 }
 
 impl Fingerprint4 {
-    const SIZE: usize = 4;
-    const MAX_EDGE_COUNT: usize = 11;
+    const SIZE: usize = <Self as CMAssociated>::CMType::SIZE;
+    const MAX_EDGE_COUNT: usize = <Self as CMAssociated>::CMType::MAX_EDGE_COUNT;
 }
 
 impl From<CompactMotif<4>> for Fingerprint4 {
     fn from(cm: CompactMotif<4>) -> Self {
-        let mut order_map =
-            [0u8; <<Self as CMAssociated>::CMType as CompactMotifConfigurator>::SIZE];
+        let mut order_map = [0u8; Self::SIZE];
         for nodes in cm.iter_nodes() {
             for n in nodes {
                 order_map[n] += 1 << (2 * (nodes.len() as usize - 2));
             }
         }
         order_map.sort_unstable();
-        // sort4(&mut order_map);
 
-        let mut inclusions = [0u8; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        let mut inclusions = [0u8; Self::MAX_EDGE_COUNT];
         for e in cm {
-            for inner in <Self as CMAssociated>::CMType::FULL_OVERLAPS[e] & cm {
+            for inner in cm.full_ovelaps(e) {
                 inclusions[inner] += 1;
             }
         }

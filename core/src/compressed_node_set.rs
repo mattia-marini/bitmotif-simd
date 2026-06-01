@@ -6,7 +6,7 @@ pub struct CompressedNodeSet {
 }
 
 impl CompressedNodeSet {
-    pub fn new(nodes: u8) -> Self {
+    pub const fn new(nodes: u8) -> Self {
         Self { nodes }
     }
 

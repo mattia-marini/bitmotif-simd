@@ -1,207 +1,55 @@
 #![allow(unused)]
 
-#[inline(always)]
-pub fn sort4<T>(arr: &mut [T; 4])
-where
-    T: PartialOrd,
-{
-    // Sorting network for 4 inputs (5 comparator)
+use std::{fs, path::Path};
 
-    if arr[0] > arr[1] {
-        arr.swap(0, 1);
-    }
-    if arr[2] > arr[3] {
-        arr.swap(2, 3);
-    }
+use hashbrown::HashMap;
 
-    if arr[0] > arr[2] {
-        arr.swap(0, 2);
-    }
-    if arr[1] > arr[3] {
-        arr.swap(1, 3);
-    }
+use crate::{compressed_motif::CompactMotif, fingerprint::Fingerprint5};
 
-    if arr[1] > arr[2] {
-        arr.swap(1, 2);
-    }
-}
+#[macro_export]
+macro_rules! iter_hyperedges {
+    ($node_count: expr, $range: expr , |$edge:ident, $edge_size:ident, $edge_idx:ident| $body:block ) => {{
+        let min: usize = *$range.start();
+        let max: usize = *$range.end();
+        assert!(min < max);
+        assert!(max <= $node_count);
 
-pub fn sort_slice4<T>(arr: &mut [T])
-where
-    T: PartialOrd,
-{
-    if arr[0] > arr[1] {
-        arr.swap(0, 1);
-    }
-    if arr[2] > arr[3] {
-        arr.swap(2, 3);
-    }
+        let mut target_size = min;
+        let mut edge_idx = 0;
+        while target_size <= max {
+            let mut curr_edge: [usize; $node_count] = [0; $node_count];
+            let mut positions: [usize; $node_count] = [0; $node_count];
+            let mut stack_size = 1;
 
-    if arr[0] > arr[2] {
-        arr.swap(0, 2);
-    }
-    if arr[1] > arr[3] {
-        arr.swap(1, 3);
-    }
+            while stack_size > 0 {
+                let stack_index = stack_size - 1;
 
-    if arr[1] > arr[2] {
-        arr.swap(1, 2);
-    }
-}
+                if stack_index == target_size {
+                    let $edge = curr_edge;
+                    let $edge_size = target_size;
+                    let $edge_idx = edge_idx;
 
-#[inline(always)]
-pub fn sort5<T>(arr: &mut [T; 5])
-where
-    T: PartialOrd,
-{
-    // Sorting network for 5 inputs (9 comparator)
+                    $body;
+                    edge_idx += 1;
+                    stack_size -= 1;
+                } else {
+                    if positions[stack_index] < $node_count - target_size + stack_size {
+                        curr_edge[stack_index] = positions[stack_index];
+                        positions[stack_index] += 1;
 
-    if arr[0] > arr[1] {
-        arr.swap(0, 1);
-    }
-    if arr[3] > arr[4] {
-        arr.swap(3, 4);
-    }
+                        if stack_index + 1 < $node_count {
+                            positions[stack_index + 1] = positions[stack_index];
+                        }
 
-    if arr[2] > arr[4] {
-        arr.swap(2, 4);
-    }
-    if arr[2] > arr[3] {
-        arr.swap(2, 3);
-    }
-
-    if arr[0] > arr[3] {
-        arr.swap(0, 3);
-    }
-    if arr[0] > arr[2] {
-        arr.swap(0, 2);
-    }
-
-    if arr[1] > arr[4] {
-        arr.swap(1, 4);
-    }
-    if arr[1] > arr[3] {
-        arr.swap(1, 3);
-    }
-
-    if arr[1] > arr[2] {
-        arr.swap(1, 2);
-    }
-}
-
-#[inline(always)]
-pub fn sort10<T>(arr: &mut [T; 10])
-where
-    T: PartialOrd,
-{
-    // Optimal sorting network for 10 inputs (29 comparators)
-
-    // Layer 1
-    if arr[0] > arr[1] {
-        arr.swap(0, 1);
-    }
-    if arr[2] > arr[3] {
-        arr.swap(2, 3);
-    }
-    if arr[4] > arr[5] {
-        arr.swap(4, 5);
-    }
-    if arr[6] > arr[7] {
-        arr.swap(6, 7);
-    }
-    if arr[8] > arr[9] {
-        arr.swap(8, 9);
-    }
-
-    // Layer 2
-    if arr[0] > arr[2] {
-        arr.swap(0, 2);
-    }
-    if arr[1] > arr[3] {
-        arr.swap(1, 3);
-    }
-    if arr[4] > arr[6] {
-        arr.swap(4, 6);
-    }
-    if arr[5] > arr[7] {
-        arr.swap(5, 7);
-    }
-
-    // Layer 3
-    if arr[0] > arr[4] {
-        arr.swap(0, 4);
-    }
-    if arr[1] > arr[5] {
-        arr.swap(1, 5);
-    }
-    if arr[2] > arr[6] {
-        arr.swap(2, 6);
-    }
-    if arr[3] > arr[7] {
-        arr.swap(3, 7);
-    }
-
-    // Layer 4
-    if arr[0] > arr[8] {
-        arr.swap(0, 8);
-    }
-    if arr[1] > arr[9] {
-        arr.swap(1, 9);
-    }
-
-    // Layer 5
-    if arr[2] > arr[8] {
-        arr.swap(2, 8);
-    }
-    if arr[3] > arr[9] {
-        arr.swap(3, 9);
-    }
-
-    // Layer 6
-    if arr[1] > arr[4] {
-        arr.swap(1, 4);
-    }
-    if arr[3] > arr[6] {
-        arr.swap(3, 6);
-    }
-    if arr[5] > arr[8] {
-        arr.swap(5, 8);
-    }
-
-    // Layer 7
-    if arr[1] > arr[2] {
-        arr.swap(1, 2);
-    }
-    if arr[4] > arr[5] {
-        arr.swap(4, 5);
-    }
-    if arr[6] > arr[8] {
-        arr.swap(6, 8);
-    }
-
-    // Layer 8
-    if arr[2] > arr[4] {
-        arr.swap(2, 4);
-    }
-    if arr[3] > arr[5] {
-        arr.swap(3, 5);
-    }
-    if arr[7] > arr[9] {
-        arr.swap(7, 9);
-    }
-
-    // Layer 9
-    if arr[3] > arr[4] {
-        arr.swap(3, 4);
-    }
-    if arr[5] > arr[6] {
-        arr.swap(5, 6);
-    }
-
-    // Layer 10
-    if arr[6] > arr[7] {
-        arr.swap(6, 7);
-    }
+                        stack_size += 1;
+                    } else {
+                        stack_size -= 1;
+                    }
+                }
+            }
+            target_size += 1;
+        }
+    }};
 }
 
 /// A constant function to calculate factorial for the M parameter
@@ -240,6 +88,20 @@ pub const fn binomial_coefficient(n: usize, mut m: usize) -> usize {
     }
 
     res
+}
+
+pub const fn max_hyperedge_count(
+    node_count: usize,
+    min_edge_size: usize,
+    max_edge_size: usize,
+) -> usize {
+    let mut total = 0;
+    let mut edge_size = min_edge_size;
+    while edge_size <= max_edge_size {
+        total += binomial_coefficient(node_count, edge_size);
+        edge_size += 1;
+    }
+    total
 }
 
 const fn iota<const N: usize>() -> [usize; N] {
@@ -425,4 +287,58 @@ impl<const N: usize> FlatBinData<N> {
         self.data[start / 8 + 1] &= 0xFF << bit_offset;
         self.data[start / 8 + 1] |= value >> (8 - bit_offset);
     }
+}
+
+const CACHE_DIR: &str = "cache";
+
+pub fn save_to_file(
+    v: HashMap<Fingerprint5, Vec<CompactMotif<5>>>,
+    file_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Ensure the directory exists
+    let path = Path::new(CACHE_DIR);
+    if !path.exists() {
+        fs::create_dir_all(path)?;
+    }
+
+    let v: Vec<(usize, Vec<_>)> = v
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_key, items))| {
+            // Map the inner items to just the 'container' field
+            let containers = items.into_iter().map(|m| m.container).collect();
+            (i, containers)
+        })
+        .collect();
+
+    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&v)?;
+
+    let file_path = path.join(file_name);
+    fs::write(file_path, bytes)?;
+
+    Ok(())
+}
+
+pub fn load_from_file(
+    file_name: &str,
+) -> Result<HashMap<Fingerprint5, Vec<CompactMotif<5>>>, Box<dyn std::error::Error>> {
+    let file_path = Path::new(CACHE_DIR).join(file_name);
+
+    let bytes = fs::read(file_path)?;
+    let deserialized: Vec<(usize, Vec<u32>)> =
+        rkyv::from_bytes::<Vec<(usize, Vec<u32>)>, rkyv::rancor::Error>(&bytes)?;
+
+    // Reconstruct the HashMap
+    let rv: HashMap<Fingerprint5, Vec<CompactMotif<5>>> = deserialized
+        .into_iter()
+        .map(|(key, containers)| {
+            let motifs = containers
+                .into_iter()
+                .map(|container| CompactMotif::<5> { container })
+                .collect::<Vec<CompactMotif<5>>>();
+            (motifs[0].fingerprint(), motifs)
+        })
+        .collect();
+
+    Ok(rv)
 }

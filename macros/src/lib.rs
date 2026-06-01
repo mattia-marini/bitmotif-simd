@@ -1,6 +1,7 @@
 mod ct_map;
 mod hoist_mod;
 mod inherent;
+mod iota;
 mod loader;
 mod tensor;
 
@@ -39,4 +40,9 @@ pub fn build_uniform_tensor(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn build_tensor(input: TokenStream) -> TokenStream {
     tensor::build_tensor(input)
+}
+
+#[proc_macro]
+pub fn iota(input: TokenStream) -> TokenStream {
+    iota::iota(input)
 }

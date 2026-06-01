@@ -1,0 +1,9 @@
+# # Required to use the options below
+unstable_features = true
+#
+# # Formats the metavariable matchers, e.g., changing ($a: ident) to ($a:ident)
+# format_macro_matchers = true
+#
+# # Formats the expansion bodies of the macro rules
+# format_macro_bodies = true
+skip_macro_invocations=["seq"]
