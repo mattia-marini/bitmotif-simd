@@ -1,7 +1,5 @@
 use foldhash::fast::FixedState;
 use hashbrown::HashSet;
-use indicatif::ProgressIterator;
-use itertools::max;
 use std::fmt::{Binary, Debug};
 use std::hash::Hash;
 use std::ops::{AddAssign, Not, RangeInclusive};
@@ -18,7 +16,7 @@ use num_traits::{AsPrimitive, One, PrimInt, Unsigned, Zero};
 
 use crate::{
     compressed_node_set::CompressedNodeSet,
-    fingerprint::{Fingerprint2, Fingerprint3, Fingerprint4, Fingerprint5},
+    fingerprint::{Fingerprint4, Fingerprint5},
     util::{BinPerm, binomial_coefficient, factorial},
 };
 
