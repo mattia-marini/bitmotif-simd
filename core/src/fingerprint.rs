@@ -1,22 +1,55 @@
 use crate::compressed_motif::{CMAssociated, CompactMotif, CompactMotifConfigurator};
+use crate::sorting_network::TryNetSort;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-pub struct Fingerprint2;
-pub struct Fingerprint3;
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
+pub struct Fingerprint3 {
+    /// The number of edges of size 2 and 3. layed out as follows:
+    /// [3-edge count (4 bits)][2-edge count (4 bits)]
+    edge_counts: u8,
+}
 
-#[derive(Copy, Clone)]
+#[allow(dead_code)]
+impl Fingerprint3 {
+    const SIZE: usize = <Self as CMAssociated>::CMType::SIZE;
+    const MAX_EDGE_COUNT: usize = <Self as CMAssociated>::CMType::MAX_EDGE_COUNT;
+}
+
+impl From<CompactMotif<3>> for Fingerprint3 {
+    fn from(cm: CompactMotif<3>) -> Self {
+        let mut edge_counts = 0u8;
+        for nodes in cm.iter_nodes() {
+            edge_counts += 1 << (4 * (nodes.len() as usize - 2));
+        }
+
+        Fingerprint3 { edge_counts }
+    }
+}
+
+impl Debug for Fingerprint3 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let order2 = (self.edge_counts >> 0) & ((1 << 4) - 1);
+        let order3 = (self.edge_counts >> 4) & ((1 << 4) - 1);
+        write!(f, "{:?}", [order2, order3])
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Copy, Clone)]
 pub struct Fingerprint4 {
-    /// for each node, a histogram of the sizes of the edges it participates in. Sorted by node
+    /// For each node, a histogram of the sizes of the edges it participates in. Sorted by node
     /// degree, then lexicographically by histogram
     order_map: [u8; Self::SIZE],
-    /// For each edge, the number of edges in which its fully contained
-    inclusions: [u8; Self::MAX_EDGE_COUNT],
+    /// For each edge, the number of edges in which its fully contained. For performance reasons a
+    /// spectrogram is saved, so that full sorting can be avoided.
+    ///
+    /// Each edge could be fully contained in at most 3 other edges, so 2 bits are enough to store
+    /// this information for each edge.
+    inclusions: u32,
 }
 
 impl Fingerprint4 {
     const SIZE: usize = <Self as CMAssociated>::CMType::SIZE;
-    const MAX_EDGE_COUNT: usize = <Self as CMAssociated>::CMType::MAX_EDGE_COUNT;
 }
 
 impl From<CompactMotif<4>> for Fingerprint4 {
@@ -29,15 +62,10 @@ impl From<CompactMotif<4>> for Fingerprint4 {
         }
         order_map.sort_unstable();
 
-        let mut inclusions = [0u8; Self::MAX_EDGE_COUNT];
+        let mut inclusions = 0;
         for e in cm {
-            for inner in cm.full_ovelaps(e) {
-                inclusions[inner] += 1;
-            }
-        }
-
-        for e in cm {
-            inclusions[e] -= 1;
+            let inclusions_count = cm.inclusions(e).edge_count() as u8 - 1;
+            inclusions += 1 << (2 * (inclusions_count as u32));
         }
 
         Fingerprint4 {
@@ -62,49 +90,6 @@ impl Debug for Fingerprint4 {
     }
 }
 
-impl Hash for Fingerprint4 {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let mut inclusions_buckets = [0u8; Self::MAX_EDGE_COUNT];
-
-        for i in 0..Self::MAX_EDGE_COUNT {
-            inclusions_buckets[self.inclusions[i] as usize] += 1;
-        }
-
-        for i in 0..Self::MAX_EDGE_COUNT {
-            inclusions_buckets[i].hash(state);
-        }
-
-        for i in 0..Self::SIZE {
-            self.order_map[i].hash(state);
-        }
-    }
-}
-
-impl PartialEq for Fingerprint4 {
-    fn eq(&self, other: &Self) -> bool {
-        let mut inclusions_buckets = [0u8; Self::MAX_EDGE_COUNT];
-        let mut other_inclusions_buckets = [0u8; Self::MAX_EDGE_COUNT];
-
-        for i in 0..Self::MAX_EDGE_COUNT {
-            inclusions_buckets[self.inclusions[i] as usize] += 1;
-            other_inclusions_buckets[other.inclusions[i] as usize] += 1;
-        }
-
-        for i in 0..Self::MAX_EDGE_COUNT {
-            if inclusions_buckets[i] != other_inclusions_buckets[i] {
-                return false;
-            }
-        }
-        if self.order_map != other.order_map {
-            return false;
-        }
-
-        true
-    }
-}
-
-impl Eq for Fingerprint4 {}
-
 #[derive(Copy, Clone)]
 pub struct Fingerprint5 {
     /// for each node, a histogram of the sizes of the edges it participates in. Sorted by node
@@ -117,7 +102,7 @@ pub struct Fingerprint5 {
     /// bit 10-15:  the number of edges in which its fully contained
     // edges_props: [u16; <Self as CMAssociated>::CMType::MAX_EDGE_COUNT],
 
-    /// For each 2-edge it stores information about its connectivity.
+    /// For each edge it stores information about its connectivity.
     /// One could think of it as a small tensor with informations stored as follows:
     /// cover_tree[overlapping node set size][group id of the overlapping node set][overlapping edge size] = number of edges with this configuration
     edge_connection_map: (
@@ -158,6 +143,47 @@ impl Fingerprint5 {
 }
 
 impl Fingerprint5 {
+    // [outer_edge][overlap_size - 1][group_id]
+    pub const GROUP_ID_ADJ: [[[<Self as CMAssociated>::CMType; 6]; 4];
+        <Self as CMAssociated>::CMType::MAX_EDGE_COUNT] = const {
+        type MotifType = <Fingerprint5 as CMAssociated>::CMType;
+
+        let mut group_id_adj = [[[<Self as CMAssociated>::CMType::ZERO; 6]; 4];
+            <Self as CMAssociated>::CMType::MAX_EDGE_COUNT];
+        let mut outer = 0;
+        while outer < Self::MAX_EDGE_COUNT {
+            let mut cross_edges = MotifType::PART_OVERLAPS[outer]
+                .const_bitand(MotifType::FULL_OVERLAPS[outer].const_not());
+            cross_edges.const_remove_edge(outer);
+            cross_edges.const_remove_order(5);
+
+            let mut iter = cross_edges.container;
+            while iter != 0 {
+                let inner = iter.trailing_zeros() as usize;
+                iter &= iter - 1;
+
+                let overlapping_nodes = Self::NODE_MAP[inner].bitand(Self::NODE_MAP[outer]);
+                let overlapping_size = overlapping_nodes.len() as usize;
+
+                let overlapping_group_idx = {
+                    let node_induced_edge = Self::EDGE_MAP[overlapping_nodes.nodes as usize];
+                    (Self::FULL_OVERLAPS[outer]
+                        .filtered_by_order(overlapping_size)
+                        .container
+                        & ((1 << node_induced_edge) - 1))
+                        .count_ones() as u32
+                } as usize;
+
+                group_id_adj[outer][overlapping_size - 1][overlapping_group_idx]
+                    .const_add_edge(inner);
+            }
+
+            outer += 1;
+        }
+
+        group_id_adj
+    };
+
     pub fn new() -> Self {
         Self {
             order_map: [0u16; <Self as CMAssociated>::CMType::SIZE],
@@ -174,11 +200,8 @@ impl Fingerprint5 {
 
         for e in cm {
             let nodes = <Self as CMAssociated>::CMType::NODE_MAP[e];
-            // order_map[nodes.len() as usize - 1] += 1;
             for n in nodes {
                 order_map[n] += 1 << (3 * (nodes.len() as usize - 2));
-                // splitting u16 in 3 parts for hyperedges of size 2,3 and 4. This will make hashing easy and fast
-                // degrees[n] += 1;
             }
         }
         order_map.sort_unstable();
@@ -201,20 +224,12 @@ impl Fingerprint5 {
 
                     let mut output = $output;
 
-                    for inner in cross_edges {
+                    for inner in cross_edges.without_order(5) {
                         let overlapping_nodes = Self::NODE_MAP[inner] & Self::NODE_MAP[$e];
                         let overlapping_size = overlapping_nodes.len() as usize;
                         let inner_hx_len = Self::NODE_MAP[inner].len() as usize;
 
-                        if inner_hx_len == 5 {
-                            continue;
-                        }
-
-                        let overlapping_group_idx = if overlapping_size == 1 {
-                            let overlapping_node = overlapping_nodes.nodes.trailing_zeros();
-                            (Self::NODE_MAP[$e].nodes & ((1 <<(overlapping_node + 1))-1)).count_ones() - 1 as u32
-                        }
-                        else {
+                        let overlapping_group_idx ={
                             let node_induced_edge = Self::EDGE_MAP[overlapping_nodes.nodes as usize];
                             (Self::FULL_OVERLAPS[$e].filtered_by_order(overlapping_size).container & ((1 <<(node_induced_edge + 1))-1)).count_ones() - 1 as u32
                         } as usize;
@@ -228,49 +243,104 @@ impl Fingerprint5 {
             };
         }
 
-        for e in cm {
-            match Self::NODE_MAP[e].len() {
-                2 => {
-                    const OVERLAP_GROUP_OFFSET: [usize; 2] = [0, 2];
-                    const INNER_OFFSET: [[usize; 3]; 2] = [[0, 2, 4], [0, 0, 2]];
+        macro_rules! insert_cross_edge2 {
+            ($e:ident, $size: literal, $output: expr) => {
+                // [outer_edge][overlap_size][group_id]
+            };
+        }
 
-                    let mut edge_infos = insert_cross_edge!(e, 2, [0u8; 3]);
-                    edge_infos[0..2].sort_unstable();
+        // order 2 edges
+        {
+            // const OVERLAP_GROUP_OFFSET: [usize; 2] = [0, 2];
+            // const INNER_OFFSET: [[usize; 3]; 2] = [[0, 2, 4], [0, 0, 2]];
+            for e in cm.filtered_by_order(2) {
+                // let mut edge_infos = insert_cross_edge!(e, 2, [0u8; 3]);
+                let out_10 = *cm & Self::GROUP_ID_ADJ[e][0][0];
+                let out_11 = *cm & Self::GROUP_ID_ADJ[e][0][1];
 
-                    let entry = ((edge_infos[0] as u16) << 0)
-                        | ((edge_infos[1] as u16) << 5)
-                        | ((edge_infos[2] as u16) << 10);
-                    edge_connection_map.0[edge_connection_map_sizes.0] = entry;
-                    edge_connection_map_sizes.0 += 1;
-                }
-                3 => {
-                    const OVERLAP_GROUP_OFFSET: [usize; 3] = [0, 3, 6];
-                    const INNER_OFFSET: [[usize; 3]; 3] = [[0, 2, 3], [0, 0, 2], [0, 0, 0]];
+                let out_20 = *cm & Self::GROUP_ID_ADJ[e][1][0];
 
-                    let mut edge_infos = insert_cross_edge!(e, 3, [0u8; 7]);
-                    edge_infos[0..3].sort_unstable();
-                    edge_infos[3..6].sort_unstable();
+                let packed_out_20 = (out_10.filtered_by_order(2).edge_count() << 0)
+                    | (out_10.filtered_by_order(3).edge_count() << 2)
+                    | (out_10.filtered_by_order(4).edge_count() << 4);
+                let packed_out_21 = (out_11.filtered_by_order(2).edge_count() << 0)
+                    | (out_11.filtered_by_order(3).edge_count() << 2)
+                    | (out_11.filtered_by_order(4).edge_count() << 4);
 
-                    let entry = (edge_infos[0] as u32) << 0
-                        | (edge_infos[1] as u32) << 3
-                        | (edge_infos[2] as u32) << 6
-                        | (edge_infos[3] as u32) << 9
-                        | (edge_infos[4] as u32) << 12
-                        | (edge_infos[5] as u32) << 15
-                        | (edge_infos[6] as u32) << 18;
-                    edge_connection_map.1[edge_connection_map_sizes.1] = entry;
-                    edge_connection_map_sizes.1 += 1;
-                }
-                // 3 => {}
-                // 4 => {}
-                _ => {}
+                let packed_out_30 = (out_20.filtered_by_order(3).edge_count() << 0)
+                    | (out_20.filtered_by_order(4).edge_count() << 2);
+
+                let mut edge_infos = [packed_out_20, packed_out_21, packed_out_30];
+                edge_infos[0..2].try_network_sort();
+
+                let entry = ((edge_infos[0] as u16) << 0)
+                    | ((edge_infos[1] as u16) << 5)
+                    | ((edge_infos[2] as u16) << 10);
+                edge_connection_map.0[edge_connection_map_sizes.0] = entry;
+                edge_connection_map_sizes.0 += 1;
             }
         }
 
-        edge_connection_map.0[0..edge_connection_map_sizes.0].sort_unstable();
-        edge_connection_map.1[0..edge_connection_map_sizes.1].sort_unstable();
-        // sort_net(&mut edge_connection_map.0[0..edge_connection_map_sizes.0]);
-        // sort_net(&mut edge_connection_map.1[..edge_connection_map_sizes.1]);
+        // order 3 edges
+        {
+            // const OVERLAP_GROUP_OFFSET: [usize; 3] = [0, 3, 6];
+            // const INNER_OFFSET: [[usize; 3]; 3] = [[0, 2, 3], [0, 0, 2], [0, 0, 0]];
+            for e in cm.filtered_by_order(3) {
+                // let mut edge_infos = insert_cross_edge!(e, 3, [0u8; 7]);
+
+                let out_10 = *cm & Self::GROUP_ID_ADJ[e][0][0];
+                let out_11 = *cm & Self::GROUP_ID_ADJ[e][0][1];
+                let out_12 = *cm & Self::GROUP_ID_ADJ[e][0][2];
+
+                let out_20 = *cm & Self::GROUP_ID_ADJ[e][1][0];
+                let out_21 = *cm & Self::GROUP_ID_ADJ[e][1][1];
+                let out_22 = *cm & Self::GROUP_ID_ADJ[e][1][2];
+
+                let out_30 = *cm & Self::GROUP_ID_ADJ[e][2][0];
+
+                let packed_out_10 = (out_10.filtered_by_order(2).edge_count() << 0)
+                    | (out_10.filtered_by_order(3).edge_count() << 2);
+                let packed_out_11 = (out_11.filtered_by_order(2).edge_count() << 0)
+                    | (out_11.filtered_by_order(3).edge_count() << 2);
+                let packed_out_12 = (out_12.filtered_by_order(2).edge_count() << 0)
+                    | (out_12.filtered_by_order(3).edge_count() << 2);
+
+                let packed_out_20 = (out_20.filtered_by_order(3).edge_count() << 0)
+                    | (out_20.filtered_by_order(4).edge_count() << 2);
+                let packed_out_21 = (out_21.filtered_by_order(3).edge_count() << 0)
+                    | (out_21.filtered_by_order(4).edge_count() << 2);
+                let packed_out_22 = (out_22.filtered_by_order(3).edge_count() << 0)
+                    | (out_22.filtered_by_order(4).edge_count() << 2);
+
+                let packed_out_30 = out_30.filtered_by_order(4).edge_count() << 0;
+
+                let mut edge_infos = [
+                    packed_out_10,
+                    packed_out_11,
+                    packed_out_12,
+                    packed_out_20,
+                    packed_out_21,
+                    packed_out_22,
+                    packed_out_30,
+                ];
+
+                edge_infos[0..3].try_network_sort();
+                edge_infos[3..6].try_network_sort();
+
+                let entry = (edge_infos[0] as u32) << 0
+                    | (edge_infos[1] as u32) << 3
+                    | (edge_infos[2] as u32) << 6
+                    | (edge_infos[3] as u32) << 9
+                    | (edge_infos[4] as u32) << 12
+                    | (edge_infos[5] as u32) << 15
+                    | (edge_infos[6] as u32) << 18;
+                edge_connection_map.1[edge_connection_map_sizes.1] = entry;
+                edge_connection_map_sizes.1 += 1;
+            }
+        }
+
+        edge_connection_map.0[0..edge_connection_map_sizes.0].try_network_sort();
+        edge_connection_map.1[0..edge_connection_map_sizes.1].try_network_sort();
 
         self.edge_connection_map = edge_connection_map;
         self.edge_connection_map_sizes = edge_connection_map_sizes;

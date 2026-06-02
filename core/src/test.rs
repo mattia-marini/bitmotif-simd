@@ -103,6 +103,7 @@ where
         }
         total_count += 1;
     }
+    let mut elapsed_time = time.elapsed();
 
     println!("Aggregating results and checking for clashing buckets...");
     let mut clashing_buckets = Vec::new();
@@ -125,8 +126,8 @@ where
     let rv = EnumerationStats {
         total_count,
         connected_count,
+        elapsed_time,
         distinct_fingerprints: map.len(),
-        elapsed_time: time.elapsed(),
         clashing_buckets_count: clashing_buckets.len(),
     };
 

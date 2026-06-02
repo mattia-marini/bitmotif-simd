@@ -10,18 +10,30 @@ impl CompressedNodeSet {
         Self { nodes }
     }
 
-    pub fn len(&self) -> u32 {
+    pub const fn len(&self) -> u32 {
         self.nodes.count_ones()
+    }
+
+    pub const fn contains(&self, node: usize) -> bool {
+        (self.nodes & (1 << node)) != 0
+    }
+
+    pub const fn bitand(&self, other: Self) -> Self {
+        Self {
+            nodes: self.nodes & other.nodes,
+        }
+    }
+
+    pub const fn bitor(&self, other: Self) -> Self {
+        Self {
+            nodes: self.nodes | other.nodes,
+        }
     }
 
     pub fn iter(&self) -> CompressetNodeSetIter {
         CompressetNodeSetIter {
             remaining_nodes: self.nodes,
         }
-    }
-
-    pub fn contains(&self, node: usize) -> bool {
-        (self.nodes & (1 << node)) != 0
     }
 }
 

@@ -8,6 +8,7 @@ use std::{
     ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Index, IndexMut, Shl},
 };
 
+use crate::fingerprint::Fingerprint3;
 use crate::util::max_hyperedge_count;
 
 use crate::iter_hyperedges;
@@ -31,19 +32,22 @@ macro_rules! impl_motif_configurator {
 
             const CONTAINER_ZERO: Self::ContainerType = 0;
             const CONTAINER_ONE: Self::ContainerType = 1;
+            const CONTAINER_FULL: Self::ContainerType =
+                (1 << max_hyperedge_count($order, 1, $order)) - 1;
 
             const ZERO: Self = Self::new(Self::CONTAINER_ZERO);
             const ONE: Self = Self::new(Self::CONTAINER_ONE);
+            const FULL: Self = Self::new(Self::CONTAINER_ONE);
 
             type AdjType = [Self; $order];
             type FullOverlapsType = [Self; Self::MAX_EDGE_COUNT];
             type PartOverlapsType = [Self; Self::MAX_EDGE_COUNT];
             type NodeMapType = [CompressedNodeSet; Self::MAX_EDGE_COUNT];
             type EdgeMapType = [u8; 1 << $order];
+            type InclusionMapType = [Self; Self::MAX_EDGE_COUNT];
 
             type RelabelingMapIndex = [u8; Self::MAX_EDGE_COUNT];
             type RelabelingMap = [Self::RelabelingMapIndex; factorial($order)];
-
             type EdgeFilterBitmaskType = [Self; Self::MAX_EDGE_COUNT];
 
             const ADJ: Self::AdjType = const {
@@ -139,6 +143,26 @@ macro_rules! impl_motif_configurator {
                 rv
             };
 
+            const INCLUSION_MAP: Self::InclusionMapType = const {
+                let mut rv_raw = [0; Self::MAX_EDGE_COUNT];
+                iter_hyperedges!($order, 1..=$order, |_edge, _edge_size, edge_idx| {
+                    let mut iter = Self::FULL_OVERLAPS[edge_idx].container;
+                    while iter != 0 {
+                        let inner = iter.trailing_zeros() as usize;
+                        iter &= !(1 << inner);
+                        rv_raw[inner] |= 1 << edge_idx;
+                    }
+                });
+
+                let mut rv = [Self::new(0); Self::MAX_EDGE_COUNT];
+                let mut i = 0;
+                while i < Self::MAX_EDGE_COUNT {
+                    rv[i] = Self::new(rv_raw[i]);
+                    i += 1;
+                }
+                rv
+            };
+
             const EDGE_FILTER_BITMASK: Self::EdgeFilterBitmaskType = const {
                 let mut rv_raw = [0; Self::MAX_EDGE_COUNT];
 
@@ -206,52 +230,76 @@ macro_rules! impl_motif_configurator {
 macro_rules! impl_motif {
     ($ct:ty, $order:literal) => {
         impl CompactMotif<$order> {
-            pub const fn bitor(self, other: Self) -> Self {
+            pub const fn const_bitor(self, other: Self) -> Self {
                 Self::new(self.container | other.container)
             }
 
-            pub const fn bitand(self, other: Self) -> Self {
+            pub const fn const_bitand(self, other: Self) -> Self {
                 Self::new(self.container & other.container)
             }
 
-            pub const fn bitor_assign(&mut self, other: Self) {
+            pub const fn const_bitor_assign(&mut self, other: Self) {
                 self.container |= other.container;
             }
 
-            pub const fn bitand_assign(&mut self, other: Self) {
+            pub const fn const_bitand_assign(&mut self, other: Self) {
                 self.container &= other.container;
             }
 
-            pub const fn shl(self, rhs: usize) -> Self {
+            pub const fn const_shl(self, rhs: usize) -> Self {
                 Self::new(self.container << rhs)
             }
 
-            pub const fn shl_assign(&mut self, rhs: usize) {
+            pub const fn const_shl_assign(&mut self, rhs: usize) {
                 self.container <<= rhs
             }
 
-            pub const fn shr(self, rhs: usize) -> Self {
+            pub const fn const_shr(self, rhs: usize) -> Self {
                 Self::new(self.container >> rhs)
             }
 
-            pub const fn shr_assign(&mut self, rhs: usize) {
+            pub const fn const_shr_assign(&mut self, rhs: usize) {
                 self.container >>= rhs
             }
 
-            pub const fn adj() -> <Self as CompactMotifConfigurator>::AdjType {
-                Self::ADJ
+            pub const fn const_not(mut self) -> Self {
+                self.container = !self.container
+                    & ((Self::CONTAINER_ONE << Self::MAX_EDGE_COUNT) - Self::CONTAINER_ONE);
+                self
             }
 
-            pub const fn full_overlaps() -> <Self as CompactMotifConfigurator>::FullOverlapsType {
-                Self::FULL_OVERLAPS
+            pub const fn const_edge_count(&self) -> u32 {
+                self.container.count_ones()
             }
 
-            pub const fn part_overlaps() -> <Self as CompactMotifConfigurator>::PartOverlapsType {
-                Self::PART_OVERLAPS
+            pub const fn const_is_empty(&self) -> bool {
+                self.container == 0
             }
 
-            pub const fn node_map() -> <Self as CompactMotifConfigurator>::NodeMapType {
-                Self::NODE_MAP
+            pub const fn const_add_edge(&mut self, edge_number: usize) {
+                self.container |= Self::CONTAINER_ONE << edge_number;
+            }
+
+            pub const fn const_remove_edge(&mut self, edge_number: usize) {
+                self.container &= !(Self::CONTAINER_ONE << edge_number);
+            }
+
+            pub const fn const_filter_by_order(&mut self, order: usize) {
+                self.container &= Self::EDGE_FILTER_BITMASK[order].container
+            }
+
+            pub const fn filtered_by_order(mut self, order: usize) -> Self {
+                self.const_filter_by_order(order);
+                self
+            }
+
+            pub const fn const_remove_order(&mut self, order: usize) {
+                self.container &= !Self::EDGE_FILTER_BITMASK[order].container
+            }
+
+            pub const fn const_without_order(mut self, order: usize) -> Self {
+                self.const_remove_order(order);
+                self
             }
 
             pub const fn max_edge_count(order: usize) -> usize {
@@ -267,45 +315,6 @@ macro_rules! impl_motif {
                 }
                 count
             }
-
-            pub const fn filter_by_order(&mut self, order: usize) {
-                self.container &= Self::EDGE_FILTER_BITMASK[order].container
-            }
-
-            pub const fn filtered_by_order(mut self, order: usize) -> Self {
-                self.filter_by_order(order);
-                self
-            }
-
-            pub const fn get_order_filter_bitmask(order: usize) -> $ct {
-                if order < 2 {
-                    return Self::CONTAINER_ZERO;
-                }
-                if order >= Self::SIZE {
-                    return Self::CONTAINER_ONE;
-                }
-
-                let mut i = 2;
-                let mut upper_bound = 0;
-                while i <= order {
-                    upper_bound += Self::max_edge_count(i);
-                    i += 1;
-                }
-
-                let low = (1 << (upper_bound - Self::max_edge_count(order))) - 1;
-                let high = ((1 << upper_bound) - 1);
-                high & !low
-            }
-
-            pub const fn get_order_filter_bitmasks() -> [$ct; Self::MAX_EDGE_COUNT] {
-                let mut rv = [0; Self::MAX_EDGE_COUNT];
-                let mut i = 0;
-                while i < Self::MAX_EDGE_COUNT {
-                    rv[i] = Self::get_order_filter_bitmask(i);
-                    i += 1;
-                }
-                rv
-            }
         }
     };
 }
@@ -319,7 +328,7 @@ macro_rules! define_compact_motif {
 
 pub trait CompactMotifConfigurator
 where
-    Self: Sized,
+    Self: Sized + Display,
     Self::ContainerType: Unsigned
         + PrimInt
         + Hash
@@ -337,10 +346,11 @@ where
     Self::PartOverlapsType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
     Self::NodeMapType:
         IntoIterator<Item = CompressedNodeSet> + Index<usize, Output = CompressedNodeSet>,
+    Self::InclusionMapType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
     Self::RelabelingMapIndex: IntoIterator<Item = u8> + Index<usize, Output = u8> + Debug,
     Self::RelabelingMap: IntoIterator<Item = Self::RelabelingMapIndex>
         + Index<usize, Output = Self::RelabelingMapIndex>,
-    Self::FingerprintType: Hash + Eq + PartialEq + From<Self>,
+    Self::FingerprintType: Hash + Eq + PartialEq + From<Self> + Debug,
     Self::EdgeFilterBitmaskType: IntoIterator<Item = Self> + Index<usize, Output = Self>,
 {
     type ContainerType;
@@ -351,24 +361,28 @@ where
 
     const CONTAINER_ZERO: Self::ContainerType;
     const CONTAINER_ONE: Self::ContainerType;
-
+    const CONTAINER_FULL: Self::ContainerType;
     const ZERO: Self;
     const ONE: Self;
+    const FULL: Self;
 
     type AdjType;
     type FullOverlapsType;
     type PartOverlapsType;
     type NodeMapType;
     type EdgeMapType;
+    type InclusionMapType;
+
     type RelabelingMap;
     type RelabelingMapIndex;
-
     type EdgeFilterBitmaskType;
 
     const ADJ: Self::AdjType;
     const FULL_OVERLAPS: Self::FullOverlapsType;
     const PART_OVERLAPS: Self::PartOverlapsType;
     const NODE_MAP: Self::NodeMapType;
+    const INCLUSION_MAP: Self::InclusionMapType;
+
     const EDGE_MAP: Self::EdgeMapType;
     const RELABELING_MAP: Self::RelabelingMap;
     const EDGE_FILTER_BITMASK: Self::EdgeFilterBitmaskType;
@@ -406,28 +420,32 @@ where
         }
     }
 
-    pub fn edge_count(&self) -> u32 {
-        self.container.count_ones()
-    }
-
-    pub fn add_edge(&mut self, edge_number: usize) {
-        self.container |= Self::CONTAINER_ONE << edge_number;
-    }
-
-    pub fn remove_edge(&mut self, edge_number: usize) {
-        self.container &= !(Self::CONTAINER_ONE << edge_number);
-    }
-
-    pub fn part_ovelaps(&self, edge_number: usize) -> Self {
-        *self & Self::PART_OVERLAPS[edge_number]
-    }
+    // pub fn edge_count(&self) -> u32 {
+    //     self.container.count_ones()
+    // }
+    //
+    // pub fn add_edge(&mut self, edge_number: usize) {
+    //     self.container |= Self::CONTAINER_ONE << edge_number;
+    // }
+    //
+    // pub fn remove_edge(&mut self, edge_number: usize) {
+    //     self.container &= !(Self::CONTAINER_ONE << edge_number);
+    // }
+    //
+    // pub fn part_ovelaps(&self, edge_number: usize) -> Self {
+    //     self.bitand(Self::PART_OVERLAPS[edge_number])
+    // }
+    //
+    // pub fn is_empty(&self) -> bool {
+    //     self.container == 0
+    // }
 
     pub fn full_ovelaps(&self, edge_number: usize) -> Self {
         *self & Self::FULL_OVERLAPS[edge_number]
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.container.is_zero()
+    pub fn inclusions(&self, e: usize) -> Self {
+        Self::new(Self::INCLUSION_MAP[e].container & self.container)
     }
 
     pub const fn one() -> Self {
@@ -436,6 +454,31 @@ where
 
     pub const fn zero() -> Self {
         <Self as CompactMotifConfigurator>::ONE
+    }
+
+    pub const fn full() -> Self {
+        <Self as CompactMotifConfigurator>::FULL
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.container == Self::CONTAINER_ZERO
+    }
+
+    pub fn contains_edge(&self, edge_number: usize) -> bool {
+        (self.container & (Self::CONTAINER_ONE << edge_number)) != Self::CONTAINER_ZERO
+    }
+
+    pub fn edge_count(&self) -> u32 {
+        self.container.count_ones()
+    }
+    pub fn add_edge(&mut self, edge_number: usize) {
+        self.container |= Self::CONTAINER_ONE << edge_number;
+    }
+    pub fn remove_edge(&mut self, edge_number: usize) {
+        self.container &= !(Self::CONTAINER_ONE << edge_number);
+    }
+    pub fn part_ovelaps(&self, edge_number: usize) -> Self {
+        *self & Self::PART_OVERLAPS[edge_number]
     }
 
     pub fn iter_all_combinations() -> CompactMotifCombinationsIterator<N> {
@@ -604,6 +647,23 @@ where
 }
 
 impl<const N: usize> Display for CompactMotif<N>
+where
+    Self: CompactMotifConfigurator,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut edges = Vec::new();
+        for e in self {
+            let mut nodes = Vec::with_capacity(8);
+            for n in Self::NODE_MAP[e] {
+                nodes.push(n);
+            }
+            edges.push(nodes);
+        }
+        f.write_str(format!("{:?}", edges).as_str())
+    }
+}
+
+impl<const N: usize> Debug for CompactMotif<N>
 where
     Self: CompactMotifConfigurator,
 {
@@ -829,7 +889,6 @@ where
     }
 }
 
-// define_compact_motif!(u8, 2, Fingerprint2);
-// define_compact_motif!(u8, 3, Fingerprint3);
+define_compact_motif!(u8, 3, Fingerprint3);
 define_compact_motif!(u16, 4, Fingerprint4);
 define_compact_motif!(u32, 5, Fingerprint5);
